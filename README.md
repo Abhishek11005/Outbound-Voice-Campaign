@@ -405,9 +405,9 @@ curl -X POST http://localhost:8081/api/v1/campaigns/${CAMPAIGN_ID}/complete
 
 ### Telephony Provider (Mock Implementation)
 The platform currently uses a **mock telephony provider** for development and testing. The mock provider simulates realistic call behavior:
-- 80% success rate for calls
-- Random call duration between 1-5 seconds
-- 70% of failures are retryable
+- 60% success rate for calls
+- Random call duration between 5-10 seconds
+- 100% of failures are retryable
 
 To integrate with a real telephony service (Twilio, Nexmo, etc.):
 
