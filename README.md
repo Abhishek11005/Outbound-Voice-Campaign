@@ -591,7 +591,15 @@ The campaign-based load testing validates the complete system:
 
 ### Expected Performance
 
+#### Default Configuration (Development)
 With default configuration and mock provider:
+- **API Throughput**: ~50-100 requests/second (limited by 2 DB connections)
+- **Call Processing**: ~0.4-0.8 calls/second total (4 workers × 5-10s call duration)
+- **Database Writes**: ~20-50 operations/second (limited by 2 DB connections)
+- **Kafka Messages**: ~100-500 messages/second throughput
+
+#### Production Configuration
+With production configuration (800 DB connections, 128 workers, 5000 batch size):
 - **API Throughput**: ~500-1000 requests/second
 - **Call Processing**: ~100-200 calls/second per worker
 - **Database Writes**: ~1000+ operations/second combined
