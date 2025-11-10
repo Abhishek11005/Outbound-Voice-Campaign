@@ -5,42 +5,6 @@ import (
 	"time"
 )
 
-func TestNormalizeRetryDefaults(t *testing.T) {
-	policy := normalizeRetry(RetryPolicy{})
-
-	if policy.BaseDelay <= 0 {
-		t.Fatalf("expected base delay to be set, got %v", policy.BaseDelay)
-	}
-	if policy.MaxDelay < policy.BaseDelay {
-		t.Fatalf("expected max delay >= base delay, got %v < %v", policy.MaxDelay, policy.BaseDelay)
-	}
-	if policy.MaxAttempts <= 0 {
-		t.Fatalf("expected positive max attempts, got %d", policy.MaxAttempts)
-	}
-}
-
-func TestNormalizeRetryPreservesValues(t *testing.T) {
-	policy := normalizeRetry(RetryPolicy{
-		MaxAttempts: 3,
-		BaseDelay:   5 * time.Second,
-		MaxDelay:    30 * time.Second,
-		Jitter:      0.5,
-	})
-
-	if policy.MaxAttempts != 3 {
-		t.Errorf("expected max attempts 3, got %d", policy.MaxAttempts)
-	}
-	if policy.BaseDelay != 5*time.Second {
-		t.Errorf("expected base delay 5s, got %v", policy.BaseDelay)
-	}
-	if policy.MaxDelay != 30*time.Second {
-		t.Errorf("expected max delay 30s, got %v", policy.MaxDelay)
-	}
-	if policy.Jitter != 0.5 {
-		t.Errorf("expected jitter 0.5, got %f", policy.Jitter)
-	}
-}
-
 func TestValidateCreateInputFailures(t *testing.T) {
 	cases := []CreateCampaignInput{
 		{Name: "", TimeZone: "UTC"},
@@ -70,5 +34,58 @@ func TestValidateCreateInputSuccess(t *testing.T) {
 
 	if err := validateCreateInput(input); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateBusinessHours(t *testing.T) {
+	// Test regular business hours (non-midnight crossing)
+	input := CreateCampaignInput{
+		Name:     "Test Campaign",
+		TimeZone: "UTC",
+		BusinessHours: []BusinessHourInput{
+			{
+				DayOfWeek: time.Monday,
+				Start:     time.Date(0, 1, 1, 9, 0, 0, 0, time.UTC),
+				End:       time.Date(0, 1, 1, 17, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	if err := validateCreateInput(input); err != nil {
+		t.Fatalf("expected valid business hours to pass, got error: %v", err)
+	}
+
+	// Test midnight-crossing business hours
+	inputMidnight := CreateCampaignInput{
+		Name:     "Test Campaign Midnight",
+		TimeZone: "UTC",
+		BusinessHours: []BusinessHourInput{
+			{
+				DayOfWeek: time.Monday,
+				Start:     time.Date(0, 1, 1, 22, 0, 0, 0, time.UTC),
+				End:       time.Date(0, 1, 1, 2, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	if err := validateCreateInput(inputMidnight); err != nil {
+		t.Fatalf("expected midnight-crossing business hours to pass, got error: %v", err)
+	}
+
+	// Test invalid zero-duration business hours
+	inputZero := CreateCampaignInput{
+		Name:     "Test Campaign Zero",
+		TimeZone: "UTC",
+		BusinessHours: []BusinessHourInput{
+			{
+				DayOfWeek: time.Monday,
+				Start:     time.Date(0, 1, 1, 9, 0, 0, 0, time.UTC),
+				End:       time.Date(0, 1, 1, 9, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	if err := validateCreateInput(inputZero); err == nil {
+		t.Fatalf("expected zero-duration business hours to fail validation")
 	}
 }

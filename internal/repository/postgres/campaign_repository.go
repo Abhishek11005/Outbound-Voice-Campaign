@@ -84,6 +84,7 @@ func (r *CampaignRepository) Update(ctx context.Context, campaign *domain.Campai
 	q := `UPDATE campaigns SET
 		name = :name,
 		description = :description,
+		status = :status,
 		time_zone = :time_zone,
 		max_concurrent_calls = :max_concurrent_calls,
 		retry_max_attempts = :retry_max_attempts,
@@ -98,6 +99,7 @@ func (r *CampaignRepository) Update(ctx context.Context, campaign *domain.Campai
 		"id":                   campaign.ID,
 		"name":                 campaign.Name,
 		"description":          campaign.Description,
+		"status":               campaign.Status,
 		"time_zone":            campaign.TimeZone,
 		"max_concurrent_calls": campaign.MaxConcurrentCalls,
 		"retry_max_attempts":   campaign.RetryPolicy.MaxAttempts,

@@ -57,20 +57,57 @@ start_service_if_needed() {
     fi
 }
 
-goreman_start() {
-    if ! command_exists goreman; then
-        echo "error: goreman is not installed. Run scripts/install-all.sh first." >&2
-        exit 1
-    fi
+simple_start() {
+    echo "Starting services directly..."
 
-    if [[ ! -f "$PROCFILE" ]]; then
-        echo "error: Procfile not found at $PROCFILE" >&2
-        exit 1
-    fi
-
-    echo "Starting services with goreman..."
     cd "$PROJECT_ROOT"
-    exec goreman -f "$PROCFILE" start
+
+    # Create logs directory if it doesn't exist
+    mkdir -p logs
+
+    # Start application services in background with log redirection
+    echo "Starting API server..."
+    CONFIG_FILE=${CONFIG_FILE:-configs/config.yaml} go run ./cmd/api --config "$CONFIG_FILE" >> logs/api.log 2>&1 &
+    API_PID=$!
+
+    echo "Starting call worker..."
+    CONFIG_FILE=${CONFIG_FILE:-configs/config.yaml} go run ./cmd/callworker --config "$CONFIG_FILE" >> logs/callworker.log 2>&1 &
+    CALLWORKER_PID=$!
+
+    echo "Starting status worker..."
+    CONFIG_FILE=${CONFIG_FILE:-configs/config.yaml} go run ./cmd/statusworker --config "$CONFIG_FILE" >> logs/statusworker.log 2>&1 &
+    STATUSWORKER_PID=$!
+
+    echo "Starting retry worker..."
+    CONFIG_FILE=${CONFIG_FILE:-configs/config.yaml} go run ./cmd/retryworker --config "$CONFIG_FILE" >> logs/retryworker.log 2>&1 &
+    RETRYWORKER_PID=$!
+
+    echo "Starting scheduler..."
+    CONFIG_FILE=${CONFIG_FILE:-configs/config.yaml} go run ./cmd/scheduler --config "$CONFIG_FILE" >> logs/scheduler.log 2>&1 &
+    SCHEDULER_PID=$!
+
+    echo ""
+    echo "Services started! Press Ctrl+C to stop all services."
+    echo "API server running on port (configured in config)"
+    echo "Logs are being written to logs/*.log files"
+    echo ""
+
+    # Wait for interrupt signal
+    trap 'echo "Stopping services..."; kill $API_PID $CALLWORKER_PID $STATUSWORKER_PID $RETRYWORKER_PID $SCHEDULER_PID 2>/dev/null; exit 0' INT TERM
+
+    # Keep running
+    wait
+}
+
+goreman_start() {
+    if command_exists goreman && [[ -f "$PROCFILE" ]]; then
+        echo "Starting services with goreman..."
+        cd "$PROJECT_ROOT"
+        exec goreman -f "$PROCFILE" start
+    else
+        echo "Goreman not available, using simple starter..."
+        simple_start
+    fi
 }
 
 main() {
@@ -89,11 +126,7 @@ main() {
     start_service_if_needed "ScyllaDB/Cassandra" 9042 "brew services start cassandra" "sudo systemctl start scylla-server" || true
     start_service_if_needed "Redis" 6379 "brew services start redis" "sudo systemctl start redis-server" || true
 
-    echo "Ensuring Confluent Kafka binaries are available..."
-    if [[ ! -x "$HOME/confluent/bin/kafka-server-start" ]]; then
-        echo "error: Confluent Kafka binaries not found at $HOME/confluent. Run scripts/install-all.sh first." >&2
-        exit 1
-    fi
+    echo "Kafka will be started via Docker when needed (see scripts/init-db.sh)"
 
     goreman_start
 }

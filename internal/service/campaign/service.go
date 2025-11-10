@@ -257,10 +257,34 @@ func (s *Service) Stats(ctx context.Context, id uuid.UUID) (*domain.CampaignStat
 	return stats, nil
 }
 
-// AddTargets appends targets to a campaign.
+// AddTargets appends targets to a campaign, validating they are part of the campaign's registered targets.
 func (s *Service) AddTargets(ctx context.Context, campaignID uuid.UUID, targets []TargetInput) error {
 	if len(targets) == 0 {
 		return nil
+	}
+
+	// Get all existing targets for this campaign to validate against
+	existingTargets, err := s.targetRepo.ListByCampaign(ctx, campaignID, 10000, "") // Get all targets, no state filter
+	if err != nil {
+		return fmt.Errorf("campaign service: get existing targets: %w", err)
+	}
+
+	// Campaign must have registered targets to allow adding more targets
+	if len(existingTargets) == 0 {
+		return fmt.Errorf("%w: cannot add targets to a campaign that has no registered target list", apperrors.ErrValidation)
+	}
+
+	// Create a set of allowed phone numbers from existing campaign targets
+	allowedPhones := make(map[string]bool)
+	for _, target := range existingTargets {
+		allowedPhones[target.PhoneNumber] = true
+	}
+
+	// Validate that all targets being added are from the registered campaign target list
+	for _, t := range targets {
+		if !allowedPhones[t.PhoneNumber] {
+			return fmt.Errorf("%w: phone number %s is not part of this campaign's registered target list", apperrors.ErrValidation, t.PhoneNumber)
+		}
 	}
 
 	now := time.Now().UTC()
@@ -328,7 +352,9 @@ func validateCreateInput(input CreateCampaignInput) error {
 		return fmt.Errorf("%w: invalid time zone %s: %v", apperrors.ErrValidation, input.TimeZone, err)
 	}
 	for _, bh := range input.BusinessHours {
-		if !bh.End.After(bh.Start) {
+		startMinutes := bh.Start.Hour()*60 + bh.Start.Minute()
+		endMinutes := bh.End.Hour()*60 + bh.End.Minute()
+		if startMinutes == endMinutes {
 			return fmt.Errorf("%w: business hour window must have positive duration", apperrors.ErrValidation)
 		}
 	}

@@ -87,10 +87,10 @@ type CallAttempt struct {
 
 // CampaignStats aggregates campaign metrics.
 type CampaignStats struct {
-	TotalCalls       int64
-	CompletedCalls   int64
-	FailedCalls      int64
-	InProgressCalls  int64
-	PendingCalls     int64
-	RetriesScheduled int64
+	TotalCalls       int64 `db:"total_calls"`
+	CompletedCalls   int64 `db:"completed_calls"`
+	FailedCalls      int64 `db:"failed_calls"`
+	InProgressCalls  int64 `db:"in_progress_calls"`
+	PendingCalls     int64 `db:"pending_calls"`
+	RetriesAttempted int64 `db:"retries_attempted"`
 }

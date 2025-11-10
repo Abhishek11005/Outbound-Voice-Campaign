@@ -2,6 +2,8 @@
 
 Outbound Voice Campaign is a Go-based microservice platform for orchestrating large-scale outbound call campaigns with per-campaign scheduling, concurrency control, retries, and deep observability. The stack now runs **natively** (no Docker/Kubernetes required) and can be bootstrapped end-to-end with a single command.
 
+For detailed architecture documentation, see [ARCHITECTURE.md](./ARCHITECTURE.md).
+
 ## Architecture Overview
 
 ```
@@ -39,6 +41,17 @@ Outbound Voice Campaign is a Go-based microservice platform for orchestrating la
 - **Kafka + Zookeeper** – Back-pressure tolerant pipeline for dispatching, statuses, and retries.
 - **Redis** – Distributed semaphore for per-campaign concurrency throttling.
 - **OpenTelemetry Collector + Jaeger** – Distributed tracing pipeline and UI.
+
+## System Design Details
+
+- **API & Persistence** – REST endpoints (Fiber) validate payloads, normalise retry/business-hour options, and persist campaign state + targets to PostgreSQL (optionally sharded via Citus). All calls are associated with campaigns to leverage business hour scheduling, concurrency control, and retry policies.
+- **Direct Call Creation** – Individual calls can be triggered via `POST /api/v1/calls` but must specify a campaign_id and use phone numbers from the campaign's registered target list.
+- **Target Validation** – Campaigns must be registered with their complete target phone number list. The `/campaigns/{id}/targets` endpoint only accepts phone numbers that were part of the original campaign registration, ensuring strict campaign boundaries.
+- **Scheduler Loop** – Periodically scans in-progress campaigns, evaluates timezone-aware business-hour windows, and only dispatches work inside permitted windows. Targets are fetched in batches and scheduled for execution.
+- **Dispatch Pipeline** – Kafka decouples scheduling from execution. Call workers acquire per-campaign capacity through Redis-backed Lua scripts before invoking the telephony provider, guaranteeing configurable concurrency limits per campaign.
+- **Status & Retry Flow** – Worker callbacks write detailed attempt histories to ScyllaDB and adjust aggregates in PostgreSQL. Retryable failures are re-queued with exponential backoff and decorrelated jitter governed by each campaign's `RetryPolicy`.
+- **Fault Tolerance & Observability** – Multiple replicas of every worker share Kafka partitions for horizontal scale. Redis operations are atomic, and OpenTelemetry spans connect API handlers, repositories, and background workers for rapid diagnosis.
+- **Business Hour Encoding** – Windows are expressed as `{ "day_of_week": 1, "start": "09:00", "end": "18:00" }` (Monday). Provide multiple entries per day if needed; omitting `business_hours` defaults to 24×7 dialling.
 
 ## Quick Start (Single Command)
 
@@ -86,7 +99,7 @@ make start-dev   # uses Procfile.dev + air
 
 Services started by `make start`:
 
-- API server on `http://localhost:8080`
+- API server on `http://localhost:8081`
 - Scheduler, Call Worker, Status Worker, Retry Worker
 - Kafka broker, Zookeeper, Redis, Jaeger, OpenTelemetry Collector
 
@@ -180,6 +193,8 @@ make logs        # tail infrastructure logs
 make clean       # remove build artifacts and local data
 make tidy        # go mod tidy
 make test        # go test ./...
+make load-test   # run default load test (3 campaigns, 50 calls)
+make load-test CAMPAIGNS=10 CALLS=500 CONCURRENT=50  # custom load test
 ```
 
 ## Testing
@@ -253,7 +268,7 @@ Once `make start` reports all services healthy, you can validate the stack end-t
 1. **Create a campaign**
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/campaigns \
+curl -X POST http://localhost:8081/api/v1/campaigns \
   -H 'Content-Type: application/json' \
   -d '{
     "name": "test-campaign",
@@ -276,37 +291,330 @@ curl -X POST http://localhost:8080/api/v1/campaigns \
 
 Capture the returned `id` for subsequent requests.
 
-2. **Start the campaign**
+2. **Update campaign configuration**
 
 ```bash
 CAMPAIGN_ID=<campaign-id-from-create>
-curl -X POST http://localhost:8080/api/v1/campaigns/${CAMPAIGN_ID}/start
-```
-
-3. **Inspect a campaign**
-
-```bash
-curl http://localhost:8080/api/v1/campaigns/${CAMPAIGN_ID} | jq
-```
-
-4. **Trigger a manual call**
-
-```bash
-curl -X POST http://localhost:8080/api/v1/calls \
+curl -X PUT http://localhost:8081/api/v1/campaigns/${CAMPAIGN_ID} \
   -H 'Content-Type: application/json' \
-  -d '{"phone_number": "+15555550055"}'
+  -d '{
+    "description": "Evening calling window",
+    "max_concurrent_calls": 25,
+    "business_hours": [
+      {"day_of_week": 1, "start": "13:00", "end": "21:00"},
+      {"day_of_week": 2, "start": "13:00", "end": "21:00"}
+    ],
+    "retry_policy": {
+      "max_attempts": 4,
+      "base_delay": "3s",
+      "max_delay": "45s",
+      "jitter": 0.3
+    }
+  }'
 ```
 
-5. **Fetch campaign statistics**
+3. **Start (or resume) the campaign**
 
 ```bash
-curl http://localhost:8080/api/v1/campaigns/${CAMPAIGN_ID}/stats | jq
+CAMPAIGN_ID=<campaign-id-from-create>
+curl -X POST http://localhost:8081/api/v1/campaigns/${CAMPAIGN_ID}/start
 ```
 
-6. **List recent calls**
+4. **Pause the campaign**
 
 ```bash
-curl http://localhost:8080/api/v1/calls | jq
+curl -X POST http://localhost:8081/api/v1/campaigns/${CAMPAIGN_ID}/pause
 ```
+
+5. **Inspect a campaign**
+
+```bash
+curl http://localhost:8081/api/v1/campaigns/${CAMPAIGN_ID} | jq
+```
+
+6. **Trigger an individual call (campaign-based)**
+
+```bash
+# Note: phone_number must be part of the campaign's registered target list
+curl -X POST http://localhost:8081/api/v1/calls \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "campaign_id": "'${CAMPAIGN_ID}'",
+    "phone_number": "+15555550001",
+    "metadata": {"priority": "high"}
+  }'
+```
+
+7. **Fetch campaign statistics**
+
+```bash
+curl http://localhost:8081/api/v1/campaigns/${CAMPAIGN_ID}/stats | jq
+```
+
+8. **List calls for a campaign**
+
+```bash
+curl http://localhost:8081/api/v1/campaigns/${CAMPAIGN_ID}/calls | jq
+```
+
+9. **Get a specific call**
+
+```bash
+# First get a call ID from the campaign calls list
+CALL_ID=$(curl -s http://localhost:8081/api/v1/campaigns/${CAMPAIGN_ID}/calls | jq -r '.calls[0].id')
+curl http://localhost:8081/api/v1/calls/${CALL_ID} | jq
+```
+
+**Note:** All calls are automatically associated with campaigns. Calls can be created in two ways: 1) Automatically by the scheduler processing campaign targets, or 2) Directly via the API using `POST /api/v1/calls` with a specified `campaign_id` and phone number from the campaign's registered targets. Calls are accessed through their parent campaigns using `GET /api/v1/campaigns/{campaign-id}/calls` or individually via `GET /api/v1/calls/{call-id}`.
+
+## Configuration Defaults & Telephony Integration
+
+### Default Values
+- **`max_concurrent_calls`**: 500 (when not specified in campaign creation)
+- **`retry_policy.max_attempts`**: 5 (when not specified)
+- **`retry_policy.base_delay`**: 2 seconds (when not specified)
+- **`retry_policy.max_delay`**: 2 minutes (when not specified)
+
+### Telephony Provider (Mock Implementation)
+The platform currently uses a **mock telephony provider** for development and testing. The mock provider simulates realistic call behavior:
+- 80% success rate for calls
+- Random call duration between 1-5 seconds
+- 70% of failures are retryable
+
+To integrate with a real telephony service (Twilio, Nexmo, etc.):
+
+1. **Create a new provider implementation** in `internal/telephony/` following the `Provider` interface:
+   ```go
+   type Provider interface {
+       PlaceCall(ctx context.Context, msg queue.DispatchMessage) (Result, error)
+   }
+   ```
+
+2. **Update the container** (`internal/app/container.go`) to select providers based on configuration:
+   ```go
+   // Replace hardcoded mock provider selection
+   var telephonyProvider telephony.Provider
+   switch c.Config.CallBridge.ProviderName {
+   case "twilio":
+       telephonyProvider = twilio.NewProvider(c.Config.CallBridge)
+   case "mock":
+       telephonyProvider = mock.NewProvider(c.Config.CallBridge)
+   default:
+       return fmt.Errorf("unknown provider: %s", c.Config.CallBridge.ProviderName)
+   }
+   ```
+
+3. **Update configuration** in `configs/config.yaml`:
+   ```yaml
+   call_bridge:
+     provider_name: twilio  # instead of 'mock'
+     # Add provider-specific config like API keys, endpoints, etc.
+   ```
 
 All commands assume the default configuration in `configs/config.yaml`. Adjust host/port or payload values as needed for your environment.
+
+## Load Testing
+
+The service includes built-in load testing capabilities for multiple campaigns with multiple calls. The load testing script creates realistic campaign scenarios with business hours, retry policies, and concurrent call limits.
+
+### Quick Load Test
+
+Create 3 campaigns with 50 calls each:
+
+```bash
+./scripts/load-test.sh 3 50 10
+```
+
+Parameters:
+- `3` = number of campaigns to create
+- `50` = calls/targets per campaign
+- `10` = concurrent API requests (to avoid overwhelming)
+- `debug` = optional 4th parameter to enable debug output
+
+**Debug mode for troubleshooting:**
+```bash
+./scripts/load-test.sh 1 5 3 debug
+```
+
+### Load Testing Options
+
+#### 1. Campaign-Based Load Testing (Recommended)
+Use the built-in script to create realistic campaign scenarios with registered target lists, business hours, retry policies, and concurrency limits:
+
+```bash
+# Create campaigns with complete registered target lists that respect business hours and concurrency limits
+./scripts/load-test.sh [campaigns] [calls_per_campaign] [concurrent_requests]
+
+# Examples:
+./scripts/load-test.sh 1 10 5     # Small test: 1 campaign with 10 registered targets
+./scripts/load-test.sh 5 100 20   # Medium test: 5 campaigns, 100 registered targets each
+./scripts/load-test.sh 10 500 50  # Large test: 10 campaigns, 500 registered targets each
+
+# Via Make:
+make load-test                           # Default: 3 campaigns, 50 registered targets each
+make load-test CAMPAIGNS=5 CALLS=200     # Custom: 5 campaigns, 200 registered targets each
+```
+
+This approach tests the complete system including:
+- Campaign lifecycle management with strict target validation
+- Registered target list enforcement (only approved phone numbers)
+- Business hour scheduling
+- Concurrency control via Redis
+- Retry logic with backoff
+- Statistics aggregation
+
+#### 2. High-Throughput Load Testing with Bombardier
+For raw API throughput testing, use Bombardier to stress-test campaign creation and target ingestion:
+
+```bash
+# Install Bombardier:
+go install github.com/codesenberg/bombardier@latest
+
+# Test campaign creation endpoint (creates campaigns with targets)
+bombardier -c 50 -n 1000 -m POST \
+  -H 'Content-Type: application/json' \
+  -b '{"name":"load-test-'$RANDOM'","description":"Bombardier test","time_zone":"UTC","max_concurrent_calls":25,"retry_policy":{"max_attempts":3,"base_delay":"2s","max_delay":"30s","jitter":0.2},"business_hours":[{"day_of_week":1,"start":"00:00","end":"23:59"}],"targets":[{"phone_number":"+15551234567"},{"phone_number":"+15557654321"}]}' \
+  http://localhost:8081/api/v1/campaigns
+
+# Test target ingestion for existing campaign (replace {campaign-id})
+# Note: Only phone numbers from the original campaign registration are allowed
+# Use phone numbers that were included when the campaign was created
+bombardier -c 100 -n 10000 -m POST \
+  -H 'Content-Type: application/json' \
+  -b '{"targets":[{"phone_number":"+15551234567"}]}' \
+  http://localhost:8081/api/v1/campaigns/{campaign-id}/targets
+
+# Test direct call creation endpoint (campaign-based validation)
+bombardier -c 50 -n 5000 -m POST \
+  -H 'Content-Type: application/json' \
+  -b '{"campaign_id":"{campaign-id}","phone_number":"+15551234567"}' \
+  http://localhost:8081/api/v1/calls
+
+# Test campaign statistics endpoint (GET)
+bombardier -c 50 -n 5000 \
+  http://localhost:8081/api/v1/campaigns/{campaign-id}/stats
+```
+
+**Note:** All calls must be part of a campaign. The system uses a campaign-centric architecture where calls are created either by the scheduler processing campaign targets or by direct API calls that specify a campaign_id and use registered target phone numbers.
+
+**Unique Campaign Names:** The load test script generates unique campaign names with timestamps and random suffixes, eliminating the need for database clearing between test runs.
+
+### Load Testing Best Practices
+
+1. **Start Small**: Begin with 1 campaign, 10 calls to verify everything works
+2. **Gradual Ramp-up**: Increase load incrementally to identify bottlenecks
+   - Small: 1 campaign, 10 calls
+   - Medium: 5 campaigns, 100 calls each
+   - Large: 10+ campaigns, 500+ calls each
+3. **Monitor Resources**: Watch CPU, memory, and I/O on all components during testing
+4. **Test Business Hours**: Create campaigns with different business hour windows to test scheduler logic
+5. **Test Retry Logic**: Monitor failed calls and verify they retry with proper backoff
+6. **Database Performance**: Track PostgreSQL and ScyllaDB write performance under load
+7. **Concurrency Testing**: Verify Redis-based concurrency limiting works correctly
+8. **Worker Scaling**: Test with different worker pool sizes in configuration
+9. **Fault Tolerance**: Kill/restart services during load testing to verify recovery
+10. **No Cleanup Required**: Load test campaigns use unique names - no database cleanup needed between runs
+
+### Monitoring Load Tests
+
+#### Real-time Statistics
+```bash
+# Monitor specific campaign (macOS/Linux)
+watch -n 2 'curl -s http://localhost:8081/api/v1/campaigns/{campaign-id}/stats | jq'
+
+# Alternative for macOS (if watch not available):
+while true; do curl -s http://localhost:8081/api/v1/campaigns/{campaign-id}/stats | jq; sleep 2; done
+
+# Monitor all campaigns
+watch -n 5 'curl -s http://localhost:8081/api/v1/campaigns | jq ".campaigns[] | {id, status}"'
+
+# Alternative for macOS:
+while true; do curl -s http://localhost:8081/api/v1/campaigns | jq ".campaigns[] | {id, status}"; sleep 5; done
+```
+
+#### System Resources
+```bash
+# Monitor Kafka topics (requires Kafka tools in PATH)
+$HOME/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic campaign.calls.dispatch --from-beginning --max-messages 10
+
+# Monitor Redis concurrency counters
+redis-cli KEYS "outbound:campaign:*"
+redis-cli GET "outbound:campaign:{campaign-id}:active"  # Current active calls
+
+# Monitor database connections
+psql -h localhost -U campaign -d campaign -c "SELECT count(*) FROM pg_stat_activity WHERE datname = 'campaign';"
+
+# Monitor campaign targets state
+psql -h localhost -U campaign -d campaign -c "SELECT state, count(*) FROM campaign_targets GROUP BY state;"
+
+# View service logs
+make logs
+```
+
+#### Performance Metrics
+- **Throughput**: calls/second processed
+- **Latency**: API response times, call completion times
+- **Error Rate**: failed vs successful calls
+- **Resource Usage**: CPU, memory, disk I/O per component
+
+### Scaling Configuration for Load Testing
+
+For high-volume load testing, adjust these configuration values:
+
+```yaml
+# configs/config.yaml
+scheduler:
+  worker_count: 128        # Increase scheduler parallelism
+  max_batch_size: 5000     # Larger batches for efficiency
+
+throttle:
+  global_concurrency: 50000  # Allow more concurrent calls
+  default_per_campaign: 1000 # Higher per-campaign limits
+
+call_bridge:
+  request_timeout: 30s     # Longer timeouts for busy periods
+
+# Database connection pools
+postgres:
+  max_conns: 200          # More DB connections
+
+redis:
+  pool_size: 200          # More Redis connections
+```
+
+### What Gets Tested
+
+Both load testing approaches validate different aspects of the system:
+
+**Campaign-Based Testing validates:**
+- ✅ End-to-end campaign workflow (create → start → schedule → execute → complete)
+- ✅ Business hour enforcement by the scheduler
+- ✅ Per-campaign concurrency limiting via Redis
+- ✅ Retry logic with exponential backoff and jitter
+- ✅ Real-time statistics aggregation
+- ✅ Worker processing and telephony integration
+- ✅ Multi-campaign orchestration
+- ✅ Target validation (campaign boundaries enforced)
+
+**Bombardier Testing validates:**
+- ✅ API endpoint throughput and latency
+- ✅ Database write performance under load
+- ✅ Connection pool management
+- ✅ Request handling capacity
+- ✅ Error handling and validation
+- ✅ Target validation (only registered phone numbers allowed)
+- ✅ Direct call creation with campaign validation
+
+### Expected Performance
+
+With default configuration and mock provider:
+- **API Throughput**: ~500-1000 requests/second
+- **Call Processing**: ~100-200 calls/second per worker
+- **Database Writes**: ~1000+ operations/second combined
+- **Kafka Messages**: ~1000+ messages/second throughput
+
+Performance scales linearly with:
+- Number of API instances (horizontal scaling)
+- Worker pool sizes (vertical scaling)
+- Database cluster size (horizontal scaling)
+- Redis cluster size (horizontal scaling)

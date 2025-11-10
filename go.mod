@@ -1,6 +1,6 @@
 module github.com/acme/outbound-call-campaign
 
-go 1.21
+go 1.25
 
 require (
 	github.com/gocql/gocql v1.7.0

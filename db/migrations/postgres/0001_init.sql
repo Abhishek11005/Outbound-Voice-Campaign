@@ -72,6 +72,21 @@ CREATE TABLE IF NOT EXISTS campaign_statistics (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS calls (
+    id UUID PRIMARY KEY,
+    campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+    phone_number TEXT NOT NULL,
+    status TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_attempt_at TIMESTAMPTZ,
+    scheduled_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_error TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_calls_campaign_status ON calls (campaign_id, status, scheduled_at);
+
 CREATE TABLE IF NOT EXISTS campaign_events (
     id BIGSERIAL PRIMARY KEY,
     campaign_id UUID NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
@@ -88,18 +103,28 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Drop existing triggers if they exist, then recreate them
+DROP TRIGGER IF EXISTS trg_campaigns_updated ON campaigns;
 CREATE TRIGGER trg_campaigns_updated
 BEFORE UPDATE ON campaigns
 FOR EACH ROW EXECUTE FUNCTION set_timestamp();
 
+DROP TRIGGER IF EXISTS trg_campaign_business_hours_updated ON campaign_business_hours;
 CREATE TRIGGER trg_campaign_business_hours_updated
 BEFORE UPDATE ON campaign_business_hours
 FOR EACH ROW EXECUTE FUNCTION set_timestamp();
 
+DROP TRIGGER IF EXISTS trg_calls_updated ON calls;
+CREATE TRIGGER trg_calls_updated
+BEFORE UPDATE ON calls
+FOR EACH ROW EXECUTE FUNCTION set_timestamp();
+
+DROP TRIGGER IF EXISTS trg_campaign_targets_updated ON campaign_targets;
 CREATE TRIGGER trg_campaign_targets_updated
 BEFORE UPDATE ON campaign_targets
 FOR EACH ROW EXECUTE FUNCTION set_timestamp();
 
+DROP TRIGGER IF EXISTS trg_campaign_statistics_updated ON campaign_statistics;
 CREATE TRIGGER trg_campaign_statistics_updated
 BEFORE UPDATE ON campaign_statistics
 FOR EACH ROW EXECUTE FUNCTION set_timestamp();
@@ -111,6 +136,7 @@ BEGIN
     IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'citus') THEN
         -- Distribute tables for horizontal scaling
         PERFORM create_distributed_table('campaigns', 'id');
+        PERFORM create_distributed_table('calls', 'campaign_id');
         PERFORM create_distributed_table('campaign_targets', 'campaign_id');
         PERFORM create_reference_table('campaign_business_hours');
         PERFORM create_reference_table('campaign_statistics');
@@ -132,6 +158,7 @@ BEGIN
         BEGIN
             PERFORM undistribute_table('campaign_events');
             PERFORM undistribute_table('campaign_targets');
+            PERFORM undistribute_table('calls');
             PERFORM undistribute_table('campaigns');
             RAISE NOTICE 'Tables undistributed from Citus';
         EXCEPTION
@@ -143,12 +170,14 @@ END $$;
 
 DROP TRIGGER IF EXISTS trg_campaign_statistics_updated ON campaign_statistics;
 DROP TRIGGER IF EXISTS trg_campaign_targets_updated ON campaign_targets;
+DROP TRIGGER IF EXISTS trg_calls_updated ON calls;
 DROP TRIGGER IF EXISTS trg_campaign_business_hours_updated ON campaign_business_hours;
 DROP TRIGGER IF EXISTS trg_campaigns_updated ON campaigns;
 DROP FUNCTION IF EXISTS set_timestamp();
 DROP TABLE IF EXISTS campaign_events;
 DROP TABLE IF EXISTS campaign_statistics;
 DROP TABLE IF EXISTS campaign_targets;
+DROP TABLE IF EXISTS calls;
 DROP TABLE IF EXISTS campaign_business_hours;
 DROP TABLE IF EXISTS campaigns;
 -- +goose StatementEnd

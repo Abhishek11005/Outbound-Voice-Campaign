@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -23,8 +24,10 @@ func NewCallDispatcher(k *Kafka, topic string) *CallDispatcher {
 
 // DispatchCall writes the dispatch message to Kafka.
 func (d *CallDispatcher) DispatchCall(ctx context.Context, msg DispatchMessage) error {
+	log.Printf("DEBUG: DispatchCall called for call %s to %s", msg.CallID, msg.PhoneNumber)
 	value, err := json.Marshal(msg)
 	if err != nil {
+		log.Printf("DEBUG: Failed to marshal message: %v", err)
 		return fmt.Errorf("call dispatcher: marshal message: %w", err)
 	}
 
@@ -34,9 +37,12 @@ func (d *CallDispatcher) DispatchCall(ctx context.Context, msg DispatchMessage) 
 		Time:  time.Now().UTC(),
 	}
 
+	log.Printf("DEBUG: Writing message to Kafka topic %s", d.writer.Stats().Topic)
 	if err := d.writer.WriteMessages(ctx, record); err != nil {
+		log.Printf("DEBUG: Failed to write message to Kafka: %v", err)
 		return fmt.Errorf("call dispatcher: write message: %w", err)
 	}
+	log.Printf("DEBUG: Successfully dispatched call %s", msg.CallID)
 	return nil
 }
 

@@ -3,6 +3,7 @@ package call
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +24,7 @@ type Dispatcher interface {
 type Service struct {
 	calls              repository.CallStore
 	campaigns          repository.CampaignRepository
+	targets            repository.CampaignTargetRepository
 	stats              repository.CampaignStatisticsRepository
 	dispatcher         Dispatcher
 	defaultRetry       domain.RetryPolicy
@@ -33,6 +35,7 @@ type Service struct {
 func NewService(
 	store repository.CallStore,
 	campaignRepo repository.CampaignRepository,
+	targetRepo repository.CampaignTargetRepository,
 	statsRepo repository.CampaignStatisticsRepository,
 	dispatcher Dispatcher,
 	defaultRetry domain.RetryPolicy,
@@ -41,6 +44,7 @@ func NewService(
 	return &Service{
 		calls:              store,
 		campaigns:          campaignRepo,
+		targets:            targetRepo,
 		stats:              statsRepo,
 		dispatcher:         dispatcher,
 		defaultRetry:       defaultRetry,
@@ -50,30 +54,35 @@ func NewService(
 
 // TriggerCallInput encapsulates the arguments for triggering a call.
 type TriggerCallInput struct {
-	CampaignID  *uuid.UUID
+	CampaignID  uuid.UUID
 	PhoneNumber string
 	Metadata    map[string]any
 }
 
 // TriggerCall creates and enqueues a call.
 func (s *Service) TriggerCall(ctx context.Context, input TriggerCallInput) (*domain.Call, error) {
+	log.Printf("DEBUG: TriggerCall called for campaign %s, phone %s", input.CampaignID, input.PhoneNumber)
 	if input.PhoneNumber == "" {
 		return nil, fmt.Errorf("%w: phone number is required", apperrors.ErrValidation)
 	}
 
-	campaignID := uuid.Nil
-	policy := s.defaultRetry
+	campaignID := input.CampaignID
+	campaign, err := s.campaigns.Get(ctx, campaignID)
+	if err != nil {
+		log.Printf("DEBUG: Failed to get campaign %s: %v", campaignID, err)
+		return nil, fmt.Errorf("call service: lookup campaign: %w", err)
+	}
+	log.Printf("DEBUG: Got campaign %s", campaign.Name)
+
+	// Validate that the phone number is part of the campaign's registered targets
+	if err := s.validatePhoneInCampaignTargets(ctx, campaignID, input.PhoneNumber); err != nil {
+		return nil, err
+	}
+
+	policy := campaign.RetryPolicy
 	concurrencyLimit := s.defaultConcurrency
-	if input.CampaignID != nil {
-		campaignID = *input.CampaignID
-		campaign, err := s.campaigns.Get(ctx, campaignID)
-		if err != nil {
-			return nil, fmt.Errorf("call service: lookup campaign: %w", err)
-		}
-		policy = campaign.RetryPolicy
-		if campaign.MaxConcurrentCalls > 0 {
-			concurrencyLimit = campaign.MaxConcurrentCalls
-		}
+	if campaign.MaxConcurrentCalls > 0 {
+		concurrencyLimit = campaign.MaxConcurrentCalls
 	}
 
 	now := time.Now().UTC()
@@ -90,15 +99,17 @@ func (s *Service) TriggerCall(ctx context.Context, input TriggerCallInput) (*dom
 	}
 
 	if err := s.calls.CreateCall(ctx, call); err != nil {
+		log.Printf("DEBUG: Failed to create call: %v", err)
 		return nil, fmt.Errorf("call service: persist call: %w", err)
 	}
+	log.Printf("DEBUG: Call created successfully: %s", call.ID)
 
-	if campaignID != uuid.Nil {
-		delta := repository.StatsDelta{TotalCallsDelta: 1, PendingCallsDelta: 1}
-		if err := s.stats.ApplyDelta(ctx, campaignID, delta); err != nil {
-			return nil, fmt.Errorf("call service: update stats: %w", err)
-		}
+	delta := repository.StatsDelta{TotalCallsDelta: 1, PendingCallsDelta: 1}
+	if err := s.stats.ApplyDelta(ctx, campaignID, delta); err != nil {
+		log.Printf("DEBUG: Failed to update stats: %v", err)
+		return nil, fmt.Errorf("call service: update stats: %w", err)
 	}
+	log.Printf("DEBUG: Stats updated successfully")
 
 	payload := queue.DispatchMessage{
 		CallID:           call.ID,
@@ -122,6 +133,29 @@ func (s *Service) TriggerCall(ctx context.Context, input TriggerCallInput) (*dom
 	}
 
 	return call, nil
+}
+
+// validatePhoneInCampaignTargets checks if a phone number is part of the campaign's registered targets.
+func (s *Service) validatePhoneInCampaignTargets(ctx context.Context, campaignID uuid.UUID, phoneNumber string) error {
+	// Get all existing targets for this campaign to validate against
+	existingTargets, err := s.targets.ListByCampaign(ctx, campaignID, 10000, "") // Get all targets, no state filter
+	if err != nil {
+		return fmt.Errorf("call service: get campaign targets: %w", err)
+	}
+
+	// If this campaign has no registered targets, reject the call
+	if len(existingTargets) == 0 {
+		return fmt.Errorf("%w: campaign has no registered targets", apperrors.ErrValidation)
+	}
+
+	// Check if the phone number is in the registered targets
+	for _, target := range existingTargets {
+		if target.PhoneNumber == phoneNumber {
+			return nil // Phone number is valid
+		}
+	}
+
+	return fmt.Errorf("%w: phone number %s is not part of this campaign's registered target list", apperrors.ErrValidation, phoneNumber)
 }
 
 // GetCall retrieves a call by id.

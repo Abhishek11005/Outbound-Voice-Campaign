@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"time"
@@ -40,10 +41,12 @@ func New(container *app.Container) *Worker {
 // Run starts the worker loop.
 func (w *Worker) Run(ctx context.Context) error {
 	cfg := w.container.Config
+	log.Printf("DEBUG: Call worker starting, reading from topic %s with group %s", cfg.Kafka.CallTopic, cfg.Kafka.ConsumerGroupID)
 	reader := w.container.Kafka.NewReader(cfg.Kafka.CallTopic, cfg.Kafka.ConsumerGroupID)
 	defer reader.Close()
 
 	for {
+		log.Printf("DEBUG: Call worker waiting for message...")
 		m, err := reader.FetchMessage(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -60,6 +63,7 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) processMessage(ctx context.Context, reader *kafka.Reader, m kafka.Message) error {
+	log.Printf("DEBUG: Call worker processing message: %s", string(m.Value))
 	var dispatch queue.DispatchMessage
 	if err := json.Unmarshal(m.Value, &dispatch); err != nil {
 		_ = reader.CommitMessages(ctx, m)

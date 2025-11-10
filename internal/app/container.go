@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/acme/outbound-call-campaign/internal/api/handlers"
 	"github.com/acme/outbound-call-campaign/internal/config"
 	"github.com/acme/outbound-call-campaign/internal/domain"
 	"github.com/acme/outbound-call-campaign/internal/infra/db"
@@ -150,6 +149,7 @@ func (c *Container) initComponents() {
 		services.Call = callsvc.NewService(
 			repos.CallStore,
 			repos.Campaign,
+			repos.Targets,
 			repos.Stats,
 			disp.CallDispatcher,
 			defaultRetry,
@@ -202,10 +202,6 @@ func (c *Container) Limiters() *limiters {
 	return c.components.limiters
 }
 
-// HandlerSet builds HTTP handlers with dependencies.
-func (c *Container) HandlerSet() *handlers.HandlerSet {
-	return handlers.NewHandlerSet(c)
-}
 
 // Close releases all held resources.
 func (c *Container) Close(ctx context.Context) error {

@@ -11,9 +11,9 @@ import (
 )
 
 type triggerCallRequest struct {
-	CampaignID  string                 `json:"campaign_id"`
-	PhoneNumber string                 `json:"phone_number"`
-	Metadata    map[string]any         `json:"metadata"`
+	CampaignID  string         `json:"campaign_id" validate:"required"`
+	PhoneNumber string         `json:"phone_number" validate:"required"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
 }
 
 func (h *HandlerSet) triggerCall(ctx *fiber.Ctx) error {
@@ -22,25 +22,21 @@ func (h *HandlerSet) triggerCall(ctx *fiber.Ctx) error {
 		return fiber.NewError(http.StatusBadRequest, "invalid request body")
 	}
 
-	input := callsvc.TriggerCallInput{
+	campaignID, err := uuid.Parse(req.CampaignID)
+	if err != nil {
+		return fiber.NewError(http.StatusBadRequest, "invalid campaign_id format")
+	}
+
+	call, err := h.calls.TriggerCall(ctx.Context(), callsvc.TriggerCallInput{
+		CampaignID:  campaignID,
 		PhoneNumber: req.PhoneNumber,
 		Metadata:    req.Metadata,
-	}
-
-	if req.CampaignID != "" {
-		id, err := uuid.Parse(req.CampaignID)
-		if err != nil {
-			return fiber.NewError(http.StatusBadRequest, "invalid campaign id")
-		}
-		input.CampaignID = &id
-	}
-
-	callRecord, err := h.calls.TriggerCall(ctx.Context(), input)
+	})
 	if err != nil {
 		return translateError(err)
 	}
 
-	return ctx.Status(http.StatusAccepted).JSON(toCallResponse(callRecord))
+	return ctx.Status(http.StatusAccepted).JSON(toCallResponse(call))
 }
 
 func (h *HandlerSet) getCall(ctx *fiber.Ctx) error {

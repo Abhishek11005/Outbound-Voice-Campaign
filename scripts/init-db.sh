@@ -128,8 +128,10 @@ run_psql_superuser "ALTER DATABASE \"$POSTGRES_APP_DB\" OWNER TO \"$POSTGRES_APP
 run_psql_superuser "CREATE EXTENSION IF NOT EXISTS citus;" 2>/dev/null || echo "Note: Citus extension not available (this is normal on macOS local setup)"
 
 echo "Running PostgreSQL migrations..."
+# Extract only the Up migration (stop before Down section)
+sed '/^-- +goose Down$/q' "$PROJECT_ROOT/db/migrations/postgres/0001_init.sql" | \
 PGPASSWORD="$POSTGRES_APP_PASSWORD" psql -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_APP_USER" -d "$POSTGRES_APP_DB" \
-    -f "$PROJECT_ROOT/db/migrations/postgres/0001_init.sql" -v ON_ERROR_STOP=1
+    -v ON_ERROR_STOP=1
 
 # Initialize ScyllaDB/Cassandra
 echo ""
@@ -168,57 +170,104 @@ cqlsh "$SCYLLA_HOST" "$SCYLLA_PORT" -f "$PROJECT_ROOT/db/migrations/scylla/0001_
 echo ""
 echo "3. Creating Kafka topics..."
 
-# Ensure Kafka and Zookeeper are running
-CONFLUENT_HOME="$HOME/confluent"
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    # Check if Confluent Kafka binaries exist
-    if [[ ! -x "$CONFLUENT_HOME/bin/kafka-server-start" ]]; then
-        echo "error: Confluent Kafka binaries not found at $CONFLUENT_HOME. Run scripts/install-all.sh first." >&2
+# Check if Kafka is already running
+if nc -z "$KAFKA_HOST" "$KAFKA_PORT" 2>/dev/null; then
+    echo "Kafka is already running on $KAFKA_HOST:$KAFKA_PORT. Skipping container startup."
+else
+    echo "Kafka not running. Starting Kafka and Zookeeper via Docker..."
+
+    # Ensure Docker is available for Kafka setup
+    if ! command_exists docker; then
+        echo "error: Docker is required for Kafka setup. Please install Docker Desktop or Colima." >&2
+        echo "Alternative: Install Kafka manually or use a different Kafka provider." >&2
         exit 1
     fi
 
-    # Check if Zookeeper is running (on port 2181)
-    if ! nc -z localhost 2181 2>/dev/null; then
-        echo "Starting Zookeeper..."
-        "$CONFLUENT_HOME/bin/zookeeper-server-start" "$PROJECT_ROOT/config/zookeeper.properties" >/dev/null 2>&1 &
-        ZOOKEEPER_PID=$!
-        sleep 5
-
-        # Wait for Zookeeper to be ready
-        for i in {1..10}; do
-            if nc -z localhost 2181 2>/dev/null; then
-                break
-            fi
-            sleep 1
-        done
+    # Try docker-compose first (older syntax)
+    if command_exists docker-compose; then
+        cd "$PROJECT_ROOT"
+        docker-compose up -d zookeeper kafka 2>/dev/null || {
+            echo "Failed to start services with docker-compose. Creating docker-compose.yml..."
+            # Create a minimal docker-compose.yml if it doesn't exist
+            cat > docker-compose.yml << 'EOF'
+version: '3.8'
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+EOF
+            docker-compose up -d zookeeper kafka
+        }
+    # Try new docker compose syntax
+    elif docker compose version >/dev/null 2>&1; then
+        cd "$PROJECT_ROOT"
+        docker compose up -d zookeeper kafka 2>/dev/null || {
+            echo "Failed to start services with docker compose. Creating docker-compose.yml..."
+            # Create a minimal docker-compose.yml if it doesn't exist
+            cat > docker-compose.yml << 'EOF'
+version: '3.8'
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+EOF
+            docker compose up -d zookeeper kafka
+        }
+    else
+        echo "error: Neither docker-compose nor docker compose is available." >&2
+        exit 1
     fi
 
-    # Check if Kafka is running (on port 9092)
-    if ! nc -z localhost 9092 2>/dev/null; then
-        echo "Starting Kafka..."
-        "$CONFLUENT_HOME/bin/kafka-server-start" "$PROJECT_ROOT/config/server.properties" >/dev/null 2>&1 &
-        KAFKA_PID=$!
-        sleep 10  # Kafka takes longer to start
-    fi
+    echo "Waiting for Kafka services to be ready..."
+    sleep 15  # Give more time for Docker containers to start
 fi
 
 wait_for_service "Kafka" "$KAFKA_HOST" "$KAFKA_PORT"
 
-KAFKA_TOPICS="$CONFLUENT_HOME/bin/kafka-topics"
-
-if [[ ! -x "$KAFKA_TOPICS" ]]; then
-    echo "error: kafka-topics.sh not found at $KAFKA_TOPICS" >&2
+# Find Kafka container (works with both docker-compose and manual containers)
+KAFKA_CONTAINER=$(docker ps --format "{{.Names}}" | grep -i kafka | head -1)
+if [ -z "$KAFKA_CONTAINER" ]; then
+    echo "error: No Kafka container found. Please start Kafka first." >&2
     exit 1
 fi
+KAFKA_TOPICS_CMD="docker exec $KAFKA_CONTAINER kafka-topics"
 
 # Function to create topic
 create_topic() {
     local topic=$1
     local partitions=${2:-3}
     local replication=${3:-1}
-    
+
     echo "Creating topic: $topic"
-    "$KAFKA_TOPICS" --create \
+    $KAFKA_TOPICS_CMD --create \
         --bootstrap-server "$KAFKA_HOST:$KAFKA_PORT" \
         --topic "$topic" \
         --partitions $partitions \
@@ -244,7 +293,7 @@ create_topic "campaign.calls.deadletter" "$DEADLETTER_PARTITIONS" 1
 # List created topics
 echo ""
 echo "Created Kafka topics:"
-"$KAFKA_TOPICS" --list --bootstrap-server "$KAFKA_HOST:$KAFKA_PORT"
+docker exec $KAFKA_CONTAINER kafka-topics --list --bootstrap-server "$KAFKA_HOST:$KAFKA_PORT" 2>/dev/null || echo "Note: Topics created successfully but listing failed"
 
 # Initialize Redis
 echo ""
@@ -274,7 +323,7 @@ echo ""
 echo "Initialized:"
 echo "  ✓ PostgreSQL database: campaign"
 echo "  ✓ ScyllaDB keyspace: campaign"
-echo "  ✓ Kafka topics (8 topics created)"
+echo "  ✓ Kafka topics (8 topics created via Docker)"
 echo "  ✓ Redis connection verified"
 echo ""
 echo "Ready to start application!"

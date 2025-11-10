@@ -47,6 +47,11 @@ func (k *Kafka) NewReader(topic, groupID string) *kafka.Reader {
 	})
 }
 
+// NewReaderWithConfig creates a kafka reader with a custom configuration.
+func (k *Kafka) NewReaderWithConfig(config kafka.ReaderConfig) *kafka.Reader {
+	return kafka.NewReader(config)
+}
+
 // Close is a no-op kept for interface symmetry.
 func (k *Kafka) Close() error {
 	return nil

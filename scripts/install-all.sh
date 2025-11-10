@@ -2,16 +2,6 @@
 
 set -e
 
-# Disable proxy settings to avoid corporate proxy issues
-unset HTTP_PROXY
-unset HTTPS_PROXY
-unset http_proxy
-unset https_proxy
-unset ALL_PROXY
-unset all_proxy
-unset NO_PROXY
-unset no_proxy
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
@@ -87,39 +77,8 @@ elif [[ "$OS_TYPE" == "Linux" ]]; then
     fi
 fi
 
-# Install Confluent Kafka and Zookeeper
-echo "3. Installing Confluent Kafka (includes Zookeeper)..."
-CONFLUENT_VERSION="7.5.0"
-CONFLUENT_DIR="$HOME/confluent"
-if [[ ! -d "$CONFLUENT_DIR" ]]; then
-    mkdir -p "$CONFLUENT_DIR"
-    cd "$CONFLUENT_DIR"
-
-    # Download Confluent Platform Community Edition
-    CONFLUENT_URL="https://packages.confluent.io/archive/7.5/confluent-community-${CONFLUENT_VERSION}.tar.gz"
-    ARCHIVE_NAME="confluent-community-${CONFLUENT_VERSION}.tar.gz"
-
-    echo "Downloading Confluent Kafka..."
-    if ! curl --noproxy '*' -f -L "$CONFLUENT_URL" -o "$ARCHIVE_NAME"; then
-        echo "Error: Failed to download Confluent Kafka"
-        exit 1
-    fi
-
-    echo "Extracting Confluent Kafka..."
-    if [[ -f "$ARCHIVE_NAME" ]]; then
-        tar -xzf "$ARCHIVE_NAME"
-        mv "confluent-${CONFLUENT_VERSION}"/* .
-        rm -rf "confluent-${CONFLUENT_VERSION}" "$ARCHIVE_NAME"
-    else
-        echo "Error: Archive file not found after download"
-        exit 1
-    fi
-
-    cd "$PROJECT_ROOT"
-fi
-
 # Install Redis
-echo "4. Installing Redis..."
+echo "3. Installing Redis..."
 if [[ "$OS_TYPE" == "Mac" ]]; then
     if ! command_exists redis-server; then
         HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= brew install redis
@@ -135,7 +94,7 @@ elif [[ "$OS_TYPE" == "Linux" ]]; then
 fi
 
 # Install Jaeger
-echo "5. Installing Jaeger..."
+echo "4. Installing Jaeger..."
 JAEGER_VERSION="1.53.0"
 JAEGER_DIR="$HOME/jaeger"
 if [[ ! -f "$JAEGER_DIR/jaeger-all-in-one" ]]; then
@@ -163,7 +122,7 @@ if [[ ! -f "$JAEGER_DIR/jaeger-all-in-one" ]]; then
 fi
 
 # Install OpenTelemetry Collector
-echo "6. Installing OpenTelemetry Collector..."
+echo "5. Installing OpenTelemetry Collector..."
 OTEL_VERSION="0.94.0"
 OTEL_DIR="$HOME/otel-collector"
 if [[ ! -f "$OTEL_DIR/otelcol-contrib" ]]; then
@@ -191,7 +150,7 @@ if [[ ! -f "$OTEL_DIR/otelcol-contrib" ]]; then
 fi
 
 # Install Go tools for process management
-echo "7. Installing Go tools..."
+echo "6. Installing Go tools..."
 # Disable proxy for Go module downloads
 export GOPROXY=direct
 export GOSUMDB=off
@@ -283,11 +242,12 @@ echo ""
 echo "Services installed:"
 echo "  ✓ PostgreSQL with Citus"
 echo "  ✓ ScyllaDB/Cassandra"
-echo "  ✓ Apache Kafka & Zookeeper"
 echo "  ✓ Redis"
 echo "  ✓ Jaeger"
 echo "  ✓ OpenTelemetry Collector"
 echo "  ✓ Process management tools (Goreman, Air)"
+echo ""
+echo "Note: Kafka can be run via Docker when needed (see scripts/init-db.sh)"
 echo ""
 echo "Next steps:"
 echo "  1. Run: ./scripts/init-db.sh     (Initialize databases)"

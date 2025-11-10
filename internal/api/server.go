@@ -7,8 +7,6 @@ import (
 
 	"github.com/gofiber/contrib/otelfiber"
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/logger"
 
 	"github.com/acme/outbound-call-campaign/internal/app"
 	"github.com/acme/outbound-call-campaign/internal/api/handlers"

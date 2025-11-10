@@ -4,7 +4,7 @@ app:
   version: 0.1.0
 
 http:
-  port: 8080
+  port: 8081
   read_timeout: 15s
   write_timeout: 15s
   idle_timeout: 120s

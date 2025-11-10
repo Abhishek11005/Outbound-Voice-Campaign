@@ -136,9 +136,12 @@ func (r *CampaignTargetRepository) ListByCampaign(ctx context.Context, campaignI
 	if state != "" {
 		query += " AND state = $2"
 		args = append(args, state)
+		query += " ORDER BY created_at ASC LIMIT $3"
+		args = append(args, limit)
+	} else {
+		query += " ORDER BY created_at ASC LIMIT $2"
+		args = append(args, limit)
 	}
-	query += " ORDER BY created_at ASC LIMIT $3"
-	args = append(args, limit)
 
 	rows, err := r.db.QueryxContext(ctx, query, args...)
 	if err != nil {

@@ -4,7 +4,7 @@ app:
   version: 0.1.0
 
 http:
-  port: 8080
+  port: 8081
   read_timeout: 30s
   write_timeout: 30s
   idle_timeout: 120s
@@ -16,15 +16,15 @@ postgres:
   password: campaign
   database: campaign
   ssl_mode: disable
-  max_conns: 50
-  min_conns: 5
+  max_conns: 2
+  min_conns: 1
   max_conn_lifetime: 30m
   max_conn_idle_time: 10m
   health_query: "SELECT 1"
 
 scylla:
   hosts:
-    - localhost
+    - 127.0.0.1
   port: 9042
   keyspace: campaign
   consistency: quorum
@@ -73,10 +73,10 @@ telemetry:
   collector_protocol: http
 
 scheduler:
-  tick_interval: 30s
+  tick_interval: 3s
   look_ahead: 5m
-  max_batch_size: 1000
-  worker_count: 8
+  max_batch_size: 50
+  worker_count: 4
   lock_ttl: 1m
   lock_key_prefix: campaign-scheduler
 

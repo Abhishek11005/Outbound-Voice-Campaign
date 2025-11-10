@@ -30,7 +30,7 @@ func NewProvider(cfg config.CallBridgeConfig) *Provider {
 
 // PlaceCall simulates a call attempt.
 func (p *Provider) PlaceCall(ctx context.Context, msg queue.DispatchMessage) (telephony.Result, error) {
-	duration := time.Duration(1+p.rng.Intn(5)) * time.Second
+	duration := time.Duration(5+p.rng.Intn(5)) * time.Second
 
 	select {
 	case <-ctx.Done():
@@ -38,10 +38,9 @@ func (p *Provider) PlaceCall(ctx context.Context, msg queue.DispatchMessage) (te
 	case <-time.After(duration):
 	}
 
-	if p.rng.Float64() <= p.successRate {
+	if p.rng.Float64() <= 0.6 {
 		return telephony.Result{Status: domain.CallStatusCompleted, Duration: duration}, nil
 	}
 
-	retryable := p.rng.Float64() < 0.7
-	return telephony.Result{Status: domain.CallStatusFailed, Duration: duration, Retryable: retryable, Error: "simulated failure"}, nil
+	return telephony.Result{Status: domain.CallStatusFailed, Duration: duration, Retryable: true, Error: "simulated failure"}, nil
 }

@@ -29,6 +29,8 @@ func New(container *app.Container) *Worker {
 // Run waits for cancellation. Logic will be implemented later.
 func (w *Worker) Run(ctx context.Context) error {
 	cfg := w.container.Config
+	logger := w.container.Logger
+
 	if len(cfg.Kafka.RetryTopics) == 0 {
 		<-ctx.Done()
 		return ctx.Err()
@@ -37,7 +39,6 @@ func (w *Worker) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	errCh := make(chan error, len(cfg.Kafka.RetryTopics))
 	var wg sync.WaitGroup
 
 	for idx, topic := range cfg.Kafka.RetryTopics {
@@ -45,20 +46,20 @@ func (w *Worker) Run(ctx context.Context) error {
 		go func(topic string, attemptIndex int) {
 			defer wg.Done()
 			if err := w.consumeTopic(ctx, topic, attemptIndex); err != nil && ctx.Err() == nil {
-				errCh <- err
+				logger.Error("retry worker: consumer failed",
+					zap.String("topic", topic),
+					zap.Int("attemptIndex", attemptIndex),
+					zap.Error(err))
+				// Don't send to errCh - continue with other consumers
+				// This prevents one failed consumer from stopping all retry processing
 			}
 		}(topic, idx+1)
 	}
 
-	select {
-	case <-ctx.Done():
-		wg.Wait()
-		return ctx.Err()
-	case err := <-errCh:
-		cancel()
-		wg.Wait()
-		return err
-	}
+	// Wait for all consumers to finish or context cancellation
+	<-ctx.Done()
+	wg.Wait()
+	return ctx.Err()
 }
 
 func (w *Worker) consumeTopic(ctx context.Context, topic string, attemptIndex int) error {
