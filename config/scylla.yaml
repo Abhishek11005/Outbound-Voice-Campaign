@@ -1,0 +1,16 @@
+cluster_name: 'OutboundCampaign'
+authorization: false
+api_port: 10000
+listen_address: 127.0.0.1
+rpc_address: 127.0.0.1
+broadcast_rpc_address: 127.0.0.1
+endpoint_snitch: GossipingPropertyFileSnitch
+auto_bootstrap: false
+data_file_directories:
+  - data/scylla
+commitlog_directory: data/scylla/commitlog
+hints_directory: data/scylla/hints
+view_hints_directory: data/scylla/view_hints
+distributed_replication:
+  strategy_class: SimpleStrategy
+  replication_factor: 1

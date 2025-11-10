@@ -1,0 +1,99 @@
+app:
+  name: outbound-call-campaign
+  env: production
+  version: 0.1.0
+
+http:
+  port: 8081
+  read_timeout: 15s
+  write_timeout: 15s
+  idle_timeout: 120s
+
+postgres:
+  host: postgres-prod.internal
+  port: 5432
+  user: campaign
+  password: change-me
+  database: campaign
+  ssl_mode: require
+  max_conns: 800
+  min_conns: 200
+  max_conn_lifetime: 15m
+  max_conn_idle_time: 5m
+  health_query: "SELECT 1"
+
+scylla:
+  hosts:
+    - scylla-1.internal
+    - scylla-2.internal
+    - scylla-3.internal
+  port: 9042
+  keyspace: campaign
+  consistency: local_quorum
+  timeout: 2s
+  disable_init_schema: true
+
+kafka:
+  brokers:
+    - kafka-1.internal:9092
+    - kafka-2.internal:9092
+    - kafka-3.internal:9092
+  client_id: outbound-call-service
+  call_topic: campaign.calls.dispatch
+  status_topic: campaign.calls.status
+  retry_topics:
+    - campaign.calls.retry.1
+    - campaign.calls.retry.2
+    - campaign.calls.retry.3
+    - campaign.calls.retry.4
+    - campaign.calls.retry.5
+  dead_letter_topic: campaign.calls.deadletter
+  consumer_group_id: outbound-call-consumer
+  retry_consumer_group_id: outbound-call-retry-consumer
+  commit_interval: 500ms
+
+redis:
+  address: redis.internal:6379
+  password: secure-password
+  db: 0
+  dial_timeout: 500ms
+  read_timeout: 1s
+  write_timeout: 1s
+  pool_size: 512
+  min_idle_conns: 128
+  max_retries: 5
+
+telemetry:
+  endpoint: http://otel-collector.internal:4318
+  service_name: outbound-call-service
+  sample_ratio: 0.05
+  metrics_interval: 15s
+  metrics_enabled: true
+  tracing_enabled: true
+  propagators:
+    - tracecontext
+    - baggage
+  shutdown_timeout: 10s
+  collector_protocol: http
+
+scheduler:
+  tick_interval: 5s
+  look_ahead: 2m
+  max_batch_size: 5000
+  worker_count: 128
+  lock_ttl: 10s
+  lock_key_prefix: campaign-scheduler
+
+retry:
+  max_attempts: 5
+  base_delay: 2s
+  max_delay: 2m
+  jitter: 0.2
+
+throttle:
+  global_concurrency: 200000
+  default_per_campaign: 10000
+
+call_bridge:
+  provider_name: mock
+  request_timeout: 5s

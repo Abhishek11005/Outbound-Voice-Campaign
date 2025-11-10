@@ -1,0 +1,13 @@
+# Infrastructure Services (same as production)
+zookeeper: $HOME/confluent/bin/zookeeper-server-start config/zookeeper.properties
+kafka: sleep 10 && $HOME/confluent/bin/kafka-server-start config/server.properties
+redis: redis-server config/redis.conf
+jaeger: $HOME/jaeger/jaeger-all-in-one --collector.zipkin.http-port=9411
+otel: $HOME/otel-collector/otelcol-contrib --config=configs/otel-collector-config.yaml
+
+# Application Services with hot reload
+api: CONFIG_FILE=${CONFIG_FILE:-configs/config.yaml} air --build.cmd "go build -o bin/api ./cmd/api" --build.bin "./bin/api" --build.exclude_dir "data,logs,bin"
+callworker: CONFIG_FILE=${CONFIG_FILE:-configs/config.yaml} air --build.cmd "go build -o bin/callworker ./cmd/callworker" --build.bin "./bin/callworker" --build.exclude_dir "data,logs,bin"
+statusworker: CONFIG_FILE=${CONFIG_FILE:-configs/config.yaml} air --build.cmd "go build -o bin/statusworker ./cmd/statusworker" --build.bin "./bin/statusworker" --build.exclude_dir "data,logs,bin"
+retryworker: CONFIG_FILE=${CONFIG_FILE:-configs/config.yaml} air --build.cmd "go build -o bin/retryworker ./cmd/retryworker" --build.bin "./bin/retryworker" --build.exclude_dir "data,logs,bin"
+scheduler: CONFIG_FILE=${CONFIG_FILE:-configs/config.yaml} air --build.cmd "go build -o bin/scheduler ./cmd/scheduler" --build.bin "./bin/scheduler" --build.exclude_dir "data,logs,bin"
