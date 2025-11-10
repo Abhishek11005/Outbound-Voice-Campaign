@@ -405,9 +405,9 @@ curl -X POST http://localhost:8081/api/v1/campaigns/${CAMPAIGN_ID}/complete
 
 ### Telephony Provider (Mock Implementation)
 The platform currently uses a **mock telephony provider** for development and testing. The mock provider simulates realistic call behavior:
-- 80% success rate for calls
-- Random call duration between 1-5 seconds
-- 70% of failures are retryable
+- 60% success rate for calls
+- Random call duration between 5-10 seconds
+- 100% of failures are retryable
 
 To integrate with a real telephony service (Twilio, Nexmo, etc.):
 
@@ -591,7 +591,15 @@ The campaign-based load testing validates the complete system:
 
 ### Expected Performance
 
+#### Default Configuration (Development)
 With default configuration and mock provider:
+- **API Throughput**: ~50-100 requests/second (limited by 2 DB connections)
+- **Call Processing**: ~0.4-0.8 calls/second total (4 workers × 5-10s call duration)
+- **Database Writes**: ~20-50 operations/second (limited by 2 DB connections)
+- **Kafka Messages**: ~100-500 messages/second throughput
+
+#### Production Configuration
+With production configuration (800 DB connections, 128 workers, 5000 batch size):
 - **API Throughput**: ~500-1000 requests/second
 - **Call Processing**: ~100-200 calls/second per worker
 - **Database Writes**: ~1000+ operations/second combined
