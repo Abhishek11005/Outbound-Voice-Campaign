@@ -365,7 +365,35 @@ CALL_ID=$(curl -s http://localhost:8081/api/v1/campaigns/${CAMPAIGN_ID}/calls | 
 curl http://localhost:8081/api/v1/calls/${CALL_ID} | jq
 ```
 
+10. **Complete a campaign**
+
+```bash
+CAMPAIGN_ID=<campaign-id-from-create>
+curl -X POST http://localhost:8081/api/v1/campaigns/${CAMPAIGN_ID}/complete
+```
+
 **Note:** All calls are automatically associated with campaigns. Calls can be created in two ways: 1) Automatically by the scheduler processing campaign targets, or 2) Directly via the API using `POST /api/v1/calls` with a specified `campaign_id` and phone number from the campaign's registered targets. Calls are accessed through their parent campaigns using `GET /api/v1/campaigns/{campaign-id}/calls` or individually via `GET /api/v1/calls/{call-id}`.
+
+## Complete API Reference
+
+### Health Check
+- `GET /healthz` - Service health check with database connectivity status
+
+### Campaigns API
+- `POST /api/v1/campaigns` - Create a new campaign
+- `GET /api/v1/campaigns` - List all campaigns
+- `GET /api/v1/campaigns/{id}` - Get campaign details
+- `PUT /api/v1/campaigns/{id}` - Update campaign configuration
+- `POST /api/v1/campaigns/{id}/start` - Start/resume a campaign
+- `POST /api/v1/campaigns/{id}/pause` - Pause a campaign
+- `POST /api/v1/campaigns/{id}/complete` - Mark campaign as completed
+- `GET /api/v1/campaigns/{id}/stats` - Get campaign statistics
+- `POST /api/v1/campaigns/{id}/targets` - Add targets to a campaign
+- `GET /api/v1/campaigns/{id}/calls` - List calls for a campaign
+
+### Calls API
+- `POST /api/v1/calls` - Trigger an individual call (campaign-based)
+- `GET /api/v1/calls/{id}` - Get call details
 
 ## Configuration Defaults & Telephony Integration
 
@@ -436,9 +464,7 @@ Parameters:
 ./scripts/load-test.sh 1 5 3 debug
 ```
 
-### Load Testing Options
-
-#### 1. Campaign-Based Load Testing (Recommended)
+### Campaign-Based Load Testing
 Use the built-in script to create realistic campaign scenarios with registered target lists, business hours, retry policies, and concurrency limits:
 
 ```bash
@@ -463,37 +489,6 @@ This approach tests the complete system including:
 - Retry logic with backoff
 - Statistics aggregation
 
-#### 2. High-Throughput Load Testing with Bombardier
-For raw API throughput testing, use Bombardier to stress-test campaign creation and target ingestion:
-
-```bash
-# Install Bombardier:
-go install github.com/codesenberg/bombardier@latest
-
-# Test campaign creation endpoint (creates campaigns with targets)
-bombardier -c 50 -n 1000 -m POST \
-  -H 'Content-Type: application/json' \
-  -b '{"name":"load-test-'$RANDOM'","description":"Bombardier test","time_zone":"UTC","max_concurrent_calls":25,"retry_policy":{"max_attempts":3,"base_delay":"2s","max_delay":"30s","jitter":0.2},"business_hours":[{"day_of_week":1,"start":"00:00","end":"23:59"}],"targets":[{"phone_number":"+15551234567"},{"phone_number":"+15557654321"}]}' \
-  http://localhost:8081/api/v1/campaigns
-
-# Test target ingestion for existing campaign (replace {campaign-id})
-# Note: Only phone numbers from the original campaign registration are allowed
-# Use phone numbers that were included when the campaign was created
-bombardier -c 100 -n 10000 -m POST \
-  -H 'Content-Type: application/json' \
-  -b '{"targets":[{"phone_number":"+15551234567"}]}' \
-  http://localhost:8081/api/v1/campaigns/{campaign-id}/targets
-
-# Test direct call creation endpoint (campaign-based validation)
-bombardier -c 50 -n 5000 -m POST \
-  -H 'Content-Type: application/json' \
-  -b '{"campaign_id":"{campaign-id}","phone_number":"+15551234567"}' \
-  http://localhost:8081/api/v1/calls
-
-# Test campaign statistics endpoint (GET)
-bombardier -c 50 -n 5000 \
-  http://localhost:8081/api/v1/campaigns/{campaign-id}/stats
-```
 
 **Note:** All calls must be part of a campaign. The system uses a campaign-centric architecture where calls are created either by the scheduler processing campaign targets or by direct API calls that specify a campaign_id and use registered target phone numbers.
 
@@ -584,9 +579,7 @@ redis:
 
 ### What Gets Tested
 
-Both load testing approaches validate different aspects of the system:
-
-**Campaign-Based Testing validates:**
+The campaign-based load testing validates the complete system:
 - ✅ End-to-end campaign workflow (create → start → schedule → execute → complete)
 - ✅ Business hour enforcement by the scheduler
 - ✅ Per-campaign concurrency limiting via Redis
@@ -595,15 +588,6 @@ Both load testing approaches validate different aspects of the system:
 - ✅ Worker processing and telephony integration
 - ✅ Multi-campaign orchestration
 - ✅ Target validation (campaign boundaries enforced)
-
-**Bombardier Testing validates:**
-- ✅ API endpoint throughput and latency
-- ✅ Database write performance under load
-- ✅ Connection pool management
-- ✅ Request handling capacity
-- ✅ Error handling and validation
-- ✅ Target validation (only registered phone numbers allowed)
-- ✅ Direct call creation with campaign validation
 
 ### Expected Performance
 
